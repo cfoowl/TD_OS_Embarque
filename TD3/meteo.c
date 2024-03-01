@@ -121,7 +121,7 @@ int main (int argc, char *argv[])
 **  Parametres  : [E] [S] [ES]
 **      1 [E]   : periode des calculs des moyennes
 **      1 [S]   : table des identifiants de Threads
-**======================================================================*/
+**===========periode===========================================================*/
 void Init (int periode, pthread_t threadID[])
 {
   pthread_attr_t attrib;
@@ -153,12 +153,11 @@ void Init (int periode, pthread_t threadID[])
   pthread_attr_setschedpolicy (&attrib, SCHED_RR);	// Round-Robin
   param.sched_priority = 12;						// priorité 12
   pthread_attr_setschedparam (&attrib, &param);
-
-  pthread_create( &threadID[1], &attrib, &TLireSerie, NULL );
-  pthread_create( &threadID[2], &attrib, &TTraiterTrame, NULL );
-  pthread_create( &threadID[3], &attrib, &TAffichage, (void *)periode );
-  pthread_create( &threadID[4], &attrib, &TMoyenne, (void *)periode );
-  pthread_create( &threadID[0], &attrib, &TLireClavier, NULL ); 
+  pthread_create( &threadID[1], NULL, &TLireSerie, NULL );
+  pthread_create( &threadID[2], NULL, &TTraiterTrame, NULL );
+  pthread_create( &threadID[3], NULL, &TAffichage, (void *)periode );
+  pthread_create( &threadID[4], NULL, &TMoyenne, (void *)periode );
+  pthread_create( &threadID[0], NULL, &TLireClavier, NULL ); 
 }
 
 /*======================================================================
@@ -190,11 +189,10 @@ void *TLireSerie (void *arg)
   {      
     // recherche le début d'une trame: 2 caractéres 0xFF qui se suivent
     i = 0;
-    do
-    {
+    do {
       err = read( fdSer, &car, 1 );
       if (err > 0)
-      {        
+      {
         switch (i)
         {
           case 0 :
@@ -236,11 +234,12 @@ void *TLireSerie (void *arg)
         i++;
       } while (i < tailleTrame);
     
-
-
-
-
-
+      pthread_mutex_lock(&mutex);
+      memcpy(&trame, (trame_t *) trameRec, MAX_TRAME);
+      trame.dataLen = tailleTrame;
+      nouvTrame = 1;
+      pthread_cond_broadcast(&cond);
+      pthread_mutex_unlock(&mutex);
 
     }
   } 
@@ -261,10 +260,73 @@ void *TTraiterTrame (void *arg)
 { 
   while (1)
   {
+    pthread_mutex_lock( &mutex );
+    while(nouvTrame == 0)
+    {
+      pthread_cond_wait(&cond, &mutex);
+    }
+    int typeTrame = trame.head[2];
+    switch (typeTrame) {
+      case 0:
+        if (AnalyserTrame00(&trame, &relMeteo) == -1)
+        {
+          printf("Mauvaise trame");
+        }
+        ventVit[iVent] = relMeteo.ventVit;
+        ventDir[iVent] = relMeteo.ventDir;
+        iVent++;
 
+        majAff = 1;
+        break;
+      case 2:
+        if (AnalyserTrame02(&trame, &relMeteo) == -1)
+        {
+          printf("Mauvaise trame");
+        }
+        tempExt[iTempExt] = relMeteo.tempExt;
+        iTempExt++;
 
+        majAff = 2;
+        break;
+      case 3:
+        if (AnalyserTrame03(&trame, &relMeteo) == -1)
+        {
+          printf("Mauvaise trame");
+        }
+        tempExt[iTempExt] = relMeteo.tempExt;
+        iTempExt++;
 
+        majAff = 2;
+        break;
+      case 5:
+        if (AnalyserTrame05(&trame, &relMeteo) == -1)
+        {
+          printf("Mauvaise trame");
+        }
 
+        tempInt[iTempInt] = relMeteo.tempInt;
+        iTempInt++;
+        majAff = 2;
+        break;
+      case 6:
+        if (AnalyserTrame06(&trame, &relMeteo) == -1)
+        {
+          printf("Mauvaise trame");
+        }
+
+        tempInt[iTempInt] = relMeteo.tempInt;
+        iTempInt++;
+        majAff = 2;
+        break;
+      default:
+        printf("Mauvais type de trame\r\n");
+        break;
+
+    }
+    
+    nouvTrame = 0;
+    pthread_cond_broadcast( &cond );
+    pthread_mutex_unlock( &mutex );
   }  
   return NULL;
 }
@@ -285,9 +347,43 @@ void *TAffichage (void *periode)
 
   while (1)
   {
+    pthread_mutex_lock( &mutex);
+    while(majAff == 0)
+    {
+      pthread_cond_wait(&cond, &mutex);
+    }
+    // Trame vent
+    if(majAff == 1)
+    {
+      if(iVent > 0) {
+        printf("Ind%d : Update vent : \r\n", iVent);
+        printf("Dir : %d\r\n", ventDir[iVent-1]);
+        printf("Vit : %f Km/h\r\n", ventVit[iVent-1]);
+      }
 
+    }
+    // Trame température
+    else if(majAff == 2){
+      if(iTempExt > 0) {
+        printf("Ind%d : Update température : \r\n", iTempExt);
+        printf("Temp : %f C\r\n", tempExt[iTempExt-1]);
+      }
+    } 
+    // Moyenne
+    else if(majAff == 3)
+    {
+      printf("Ind%d : Affichage de la moyenne : \r\n", iMoy);
+      if (iMoy > 0) { 
+        printf("Dir : %d\r\n", moyenneMeteo[iMoy-1].ventDir);
+        printf("Vit : %f Km/h\r\n", moyenneMeteo[iMoy-1].ventVit);
+        printf("Temp : %f C\r\n", moyenneMeteo[iMoy-1].temp);
+    }
 
+    }
 
+    majAff = 0;    
+    pthread_cond_broadcast(&cond);
+    pthread_mutex_unlock( &mutex);
   }  
   return NULL;
 }
@@ -316,9 +412,32 @@ void *TMoyenne (void *periode)
                            
   while (1)
   {
+       
+    somVentVit= 0;
+    somVentDir = 0;
+    for(int i = 0; i < iVent; i++) {
+      somVentVit += ventVit[i];
+      somVentDir += ventDir[i];
+    }
 
-  
-  
+    somTemp = 0;
+    for(int i = 0; i < iTempExt; i++) {
+      somTemp += tempExt[i];
+    }
+    moyVentVit = somVentVit/(iVent+1); 
+    moyVentDir = somVentDir/(iVent+1);
+    moyTemp = somTemp/(iTempExt+1);
+
+    pthread_mutex_lock(&mutex);
+    moyenneMeteo[iMoy].ventVit = moyVentVit;
+    moyenneMeteo[iMoy].ventDir = moyVentDir;
+    moyenneMeteo[iMoy].temp = moyTemp;
+
+    iMoy++;
+    majAff = 3;
+    pthread_cond_broadcast(&cond);
+    pthread_mutex_unlock(&mutex);
+    sleep((int)periode*10);
   }  
   return NULL;
 }
@@ -339,7 +458,6 @@ void *TLireClavier (void *arg)
   do
   {
     touche = getchar();
-    pthread_mutex_lock( &mutex );
     switch (touche) {
       case 'q':
         break;
@@ -348,7 +466,6 @@ void *TLireClavier (void *arg)
         break;
     }
 
-    pthread_mutex_unlock( &mutex );
   } while (touche != 'q');
   
  _unraw( STDIN_FILENO );   // configuration du clavier dans le mode edited
@@ -370,7 +487,7 @@ void *TLireClavier (void *arg)
 **      1 [S]   : structure pour sauvegarder des paramètres du terminal
 **                associé au port
 **======================================================================*/
-int OuvrirLiaison (char *portcom, struct termios *pterm)
+int OuvrirLiaison (const char *portcom, struct termios *pterm)
 { 
   struct  termios new_term;
   speed_t speed;

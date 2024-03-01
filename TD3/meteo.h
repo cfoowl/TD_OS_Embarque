@@ -41,7 +41,7 @@ void *TAffichage (void *arg);
 void *TMoyenne (void *arg);
 void *TLireClavier (void *arg);
 
-int OuvrirLiaison (char *portcom, struct termios *pterm);
+int OuvrirLiaison (const char *portcom, struct termios *pterm);
 void FermerLiaison (int fd, struct termios *pterm);
 
 #endif  // ifndef __METEO_H__
