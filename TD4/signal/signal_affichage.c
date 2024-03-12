@@ -20,13 +20,20 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <signal.h>
 
 #include "terminal.h"
-#include "meteo.h"
-
+#include "shmem.h"
 
 int fd;
 shmem_t * ptr;
+
+void handler(int signal_number) {
+
+  printf("Vent : \r\n", ptr->iVent);
+  printf("Dir : %d\r\n", ptr->ventDir[ptr->iVent-1]);
+  printf("Vit : %f Km/h\r\n", ptr->ventVit[ptr->iVent-1]);
+}
 
 int main (int argc, char *argv[])
 {
@@ -41,19 +48,23 @@ int main (int argc, char *argv[])
 
   _clrscr();
   
-  // Initialise la mémoire partagée
-  // Création
-  fd = shm_open(argv[1], O_RDWR, S_IRWXU);
-
+  /* crée la mémoire partagée */
+  fd = shm_open("signal", O_RDWR | O_CREAT, S_IRWXU);
   if (fd == -1)
   {
-    printf("affichage: erreur d'accès à la memoire partagee %s : %s\n",
-        argv[1],
-        strerror(errno) );
+    printf("signal_affichage: erreur a la creation de la memoire partagee 'signal': %s\n",
+    strerror(errno) );
     exit( EXIT_FAILURE );
   }
-  // pointe sur une zone de la mémoire partagée
+
+  /* dimensionne la taille de la mémoire partagée */
+  ftruncate(fd, sizeof(shmem_t));
+
+  /* pointe sur une zone de la mémoire partagée */
   ptr = mmap(0, sizeof(shmem_t), PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+
+  // initialise le sémaphore
+  sem_init( &ptr->semaphore, 1, 0 );
 
   if(ptr->iVent > 0) {
     printf("Ind%d : Vent : \r\n", ptr->iVent);
